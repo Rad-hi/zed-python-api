@@ -92,6 +92,7 @@ from libc.string cimport memcpy
 from cpython cimport bool
 import enum
 
+from numba import cuda
 import cupy as cp
 
 import numpy as np
@@ -4520,23 +4521,26 @@ cdef class Mat:
             shape = (self.mat.getHeight(), self.mat.getWidth(), self.mat.getChannels())
 
         cdef size_t size = 0
+        itemsize = None
         dtype = None
         nptype = None
         npdim = None
         if self.mat.getDataType() in (c_MAT_TYPE.U8_C1, c_MAT_TYPE.U8_C2, c_MAT_TYPE.U8_C3, c_MAT_TYPE.U8_C4):
-            size = self.mat.getHeight()*self.mat.getWidth()*self.mat.getChannels()
+            itemsize = 1
             dtype = np.uint8
             nptype = np.NPY_UINT8
         elif self.mat.getDataType() in (c_MAT_TYPE.F32_C1, c_MAT_TYPE.F32_C2, c_MAT_TYPE.F32_C3, c_MAT_TYPE.F32_C4):
-            size = self.mat.getHeight()*self.mat.getWidth()*self.mat.getChannels()*sizeof(float)
+            itemsize = sizeof(float)
             dtype = np.float32
             nptype = np.NPY_FLOAT32
         elif self.mat.getDataType() == c_MAT_TYPE.U16_C1:
-            size = self.mat.getHeight()*self.mat.getWidth()*self.mat.getChannels()*sizeof(ushort)
+            itemsize = sizeof(ushort)
             dtype = np.ushort
             nptype = np.NPY_UINT16
         else:
             raise RuntimeError("Unknown Mat data_type value: {0}".format(<int>self.mat.getDataType()))
+        
+        size = self.mat.getHeight()*self.mat.getWidth()*self.mat.getChannels()*itemsize
 
         if self.mat.getDataType() in (c_MAT_TYPE.U8_C1, c_MAT_TYPE.F32_C1, c_MAT_TYPE.U16_C1):
             npdim = 2
@@ -4557,20 +4561,20 @@ cdef class Mat:
         # Ref: https://docs.cupy.dev/en/stable/reference/generated/cupy.cuda.runtime.memcpy.html
         # Ref: https://developer.download.nvidia.com/compute/DevZone/docs/html/C/doc/CUDA_Toolkit_Reference_Manual.pdf
         if memory_type.value == MEM.GPU.value and deep_copy:
-            arr = cp.empty(shape, dtype=dtype)
-            dst_p = arr.data.ptr
-            src_p = self.get_pointer(memory_type=memory_type)
-            TRANSFER_KIND_GPU_GPU = 3
-            cp.cuda.runtime.memcpy(dst_p, src_p, size, TRANSFER_KIND_GPU_GPU)
+            raise NotImplementedError("Deep copy isn't implemented yet!")
 
         ##
         # Ref: https://github.com/cupy/cupy/issues/4644
         # Ref: https://docs.cupy.dev/en/stable/user_guide/interoperability.html#device-memory-pointers
         elif memory_type.value == MEM.GPU.value and not deep_copy:
+            # Ref: https://github.com/numba/numba/blob/452eb5755320506de96bed83021566d0093a3d3a/numba/cuda/api.py#L23
+            strides = (self.get_width_bytes(), shape[2], itemsize)
+            context = cuda.cudadrv.devices.get_context()
             src_p = self.get_pointer(memory_type=memory_type)
-            mem = cp.cuda.UnownedMemory(src_p, size, self)
-            memptr = cp.cuda.MemoryPointer(mem, offset=0)
-            arr = cp.ndarray(shape, dtype=dtype, memptr=memptr)
+            src_p = cuda.cudadrv.driver.get_devptr_for_active_ctx(src_p)
+            #size = cuda.cudadrv.driver.memory_size_from_info(shape, strides, itemsize)
+            memptr = cuda.cudadrv.driver.MemoryPointer(context, src_p, size)
+            arr = cuda.cudadrv.devicearray.DeviceNDArray(shape, strides, dtype, gpu_data=memptr)
 
         elif memory_type.value == MEM.CPU.value and deep_copy:
             nparr = np.empty(shape, dtype=dtype)
