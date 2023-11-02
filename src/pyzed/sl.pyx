@@ -93,7 +93,6 @@ from cpython cimport bool
 import enum
 
 from numba import cuda
-import cupy as cp
 
 import numpy as np
 cimport numpy as np
@@ -4557,23 +4556,18 @@ cdef class Mat:
         arr = None  # Could be either an `np.ndarray` or a `cp.ndarray` 
 
         ##
-        # Ref: https://stackoverflow.com/questions/71344734/cupy-array-construction-from-existing-gpu-pointer
-        # Ref: https://docs.cupy.dev/en/stable/reference/generated/cupy.cuda.runtime.memcpy.html
-        # Ref: https://developer.download.nvidia.com/compute/DevZone/docs/html/C/doc/CUDA_Toolkit_Reference_Manual.pdf
+        # Ref: 
         if memory_type.value == MEM.GPU.value and deep_copy:
             raise NotImplementedError("Deep copy isn't implemented yet!")
 
         ##
-        # Ref: https://github.com/cupy/cupy/issues/4644
-        # Ref: https://docs.cupy.dev/en/stable/user_guide/interoperability.html#device-memory-pointers
+        # Ref: https://github.com/numba/numba/blob/452eb5755320506de96bed83021566d0093a3d3a/numba/cuda/api.py#L23
         elif memory_type.value == MEM.GPU.value and not deep_copy:
-            # Ref: https://github.com/numba/numba/blob/452eb5755320506de96bed83021566d0093a3d3a/numba/cuda/api.py#L23
-            strides = (self.get_width_bytes(), shape[2], itemsize)
             context = cuda.cudadrv.devices.get_context()
             src_p = self.get_pointer(memory_type=memory_type)
-            src_p = cuda.cudadrv.driver.get_devptr_for_active_ctx(src_p)
-            #size = cuda.cudadrv.driver.memory_size_from_info(shape, strides, itemsize)
-            memptr = cuda.cudadrv.driver.MemoryPointer(context, src_p, size)
+            devptr = cuda.cudadrv.driver.get_devptr_for_active_ctx(src_p)
+            memptr = cuda.cudadrv.driver.MemoryPointer(context, devptr, size)
+            strides = (self.get_step_bytes(), self.get_channels(), itemsize)
             arr = cuda.cudadrv.devicearray.DeviceNDArray(shape, strides, dtype, gpu_data=memptr)
 
         elif memory_type.value == MEM.CPU.value and deep_copy:
